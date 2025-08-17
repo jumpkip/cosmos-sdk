@@ -483,7 +483,7 @@ func extractSignersBytes(tx sdk.Tx) ([][]byte, error) {
 // BaseApp.Commit() will set the check state based on the latest header.
 //
 // NOTE: Since CheckTx and DeliverTx state are managed separately, subsequent and
-// sequential txs orginating from the same account cannot be handled correctly in
+// sequential txs originating from the same account cannot be handled correctly in
 // a reliable way unless sequence numbers are managed and tracked manually by a
 // client. It is recommended to instead use multiple messages in a tx.
 type IncrementSequenceDecorator struct {
@@ -638,7 +638,7 @@ func GetSignerAcc(ctx sdk.Context, ak AccountKeeper, addr sdk.AccAddress) (sdk.A
 }
 
 // CountSubKeys counts the total number of keys for a multi-sig public key.
-// A non-multisig, i.e. a regular signature, it naturally a count of 1. If it is a multisig,
+// A non-multisig, i.e. a regular signature, it naturally has a count of 1. If it is a multisig,
 // then it recursively calls it on its pubkeys.
 func CountSubKeys(pub cryptotypes.PubKey) int {
 	if pub == nil {
