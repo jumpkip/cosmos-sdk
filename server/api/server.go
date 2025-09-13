@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	cmtrpcserver "github.com/cometbft/cometbft/v2/rpc/jsonrpc/server"
+	cmtrpcserver "github.com/cometbft/cometbft/rpc/jsonrpc/server"
 	gateway "github.com/cosmos/gogogateway"
-	"github.com/golang/protobuf/proto" //nolint:staticcheck // grpc-gateway uses deprecated golang/protobuf
+	"github.com/golang/protobuf/proto" //nolint:staticcheck // keeping deprecated import
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
