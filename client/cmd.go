@@ -4,17 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/cockroachdb/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-
-	signingv1beta1 "cosmossdk.io/api/cosmos/tx/signing/v1beta1"
 
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
@@ -167,8 +165,9 @@ func ReadPersistentCommandFlags(clientCtx Context, flagSet *pflag.FlagSet) (Cont
 					MinVersion: tls.VersionTLS12,
 				})))
 			}
+			dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 
-			grpcClient, err := grpc.Dial(grpcURI, dialOpts...) // nolint:staticcheck // grpc.Dial is deprecated but we still use it
+			grpcClient, err := grpc.NewClient(grpcURI, dialOpts...)
 			if err != nil {
 				return Context{}, err
 			}
@@ -284,18 +283,11 @@ func readTxCommandFlags(clientCtx Context, flagSet *pflag.FlagSet) (Context, err
 
 		clientCtx = clientCtx.WithFrom(from).WithFromAddress(fromAddr).WithFromName(fromName)
 
-		if keyType == keyring.TypeLedger && clientCtx.SignModeStr == flags.SignModeTextual {
-			if !slices.Contains(clientCtx.TxConfig.SignModeHandler().SupportedModes(), signingv1beta1.SignMode_SIGN_MODE_TEXTUAL) {
-				return clientCtx, fmt.Errorf("SIGN_MODE_TEXTUAL is not available")
-			}
-		}
-
 		// If the `from` signer account is a ledger key, we need to use
 		// SIGN_MODE_AMINO_JSON, because ledger doesn't support proto yet.
 		// ref: https://github.com/cosmos/cosmos-sdk/issues/8109
 		if keyType == keyring.TypeLedger &&
 			clientCtx.SignModeStr != flags.SignModeLegacyAminoJSON &&
-			clientCtx.SignModeStr != flags.SignModeTextual &&
 			!clientCtx.LedgerHasProtobuf {
 			fmt.Println("Default sign-mode 'direct' not supported by Ledger, using sign-mode 'amino-json'.")
 			clientCtx = clientCtx.WithSignModeStr(flags.SignModeLegacyAminoJSON)

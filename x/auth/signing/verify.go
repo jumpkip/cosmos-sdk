@@ -5,11 +5,11 @@ import (
 	"fmt"
 
 	signingv1beta1 "cosmossdk.io/api/cosmos/tx/signing/v1beta1"
-	txsigning "cosmossdk.io/x/tx/signing"
 
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	"github.com/cosmos/cosmos-sdk/crypto/types/multisig"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
+	txsigning "github.com/cosmos/cosmos-sdk/x/tx/signing"
 )
 
 // APISignModesToInternal converts a protobuf SignMode array to a signing.SignMode array.
@@ -32,8 +32,6 @@ func APISignModeToInternal(mode signingv1beta1.SignMode) (signing.SignMode, erro
 		return signing.SignMode_SIGN_MODE_DIRECT, nil
 	case signingv1beta1.SignMode_SIGN_MODE_LEGACY_AMINO_JSON:
 		return signing.SignMode_SIGN_MODE_LEGACY_AMINO_JSON, nil
-	case signingv1beta1.SignMode_SIGN_MODE_TEXTUAL:
-		return signing.SignMode_SIGN_MODE_TEXTUAL, nil
 	case signingv1beta1.SignMode_SIGN_MODE_DIRECT_AUX:
 		return signing.SignMode_SIGN_MODE_DIRECT_AUX, nil
 	default:
@@ -48,8 +46,6 @@ func internalSignModeToAPI(mode signing.SignMode) (signingv1beta1.SignMode, erro
 		return signingv1beta1.SignMode_SIGN_MODE_DIRECT, nil
 	case signing.SignMode_SIGN_MODE_LEGACY_AMINO_JSON:
 		return signingv1beta1.SignMode_SIGN_MODE_LEGACY_AMINO_JSON, nil
-	case signing.SignMode_SIGN_MODE_TEXTUAL:
-		return signingv1beta1.SignMode_SIGN_MODE_TEXTUAL, nil
 	case signing.SignMode_SIGN_MODE_DIRECT_AUX:
 		return signingv1beta1.SignMode_SIGN_MODE_DIRECT_AUX, nil
 	default:

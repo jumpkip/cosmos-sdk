@@ -7,9 +7,8 @@ import (
 
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 
-	storetypes "cosmossdk.io/store/types"
-
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
+	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 	"github.com/cosmos/cosmos-sdk/x/staking"
@@ -28,6 +27,7 @@ func (app *SimApp) ExportAppStateAndValidators(forZeroHeight bool, jailAllowedAd
 	if forZeroHeight {
 		height = 0
 		app.prepForZeroHeightGenesis(ctx, jailAllowedAddrs)
+		ctx = ctx.WithBlockHeight(height)
 	}
 
 	genState, err := app.ModuleManager.ExportGenesisForModules(ctx, app.appCodec, modulesToExport)
@@ -220,6 +220,10 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 
 	_, err = app.StakingKeeper.ApplyAndReturnValidatorSetUpdates(ctx)
 	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := app.StakingKeeper.PrepareConsKeyRotationsForZeroHeightExport(ctx); err != nil {
 		log.Fatal(err)
 	}
 

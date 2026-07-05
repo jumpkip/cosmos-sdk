@@ -9,11 +9,11 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"cosmossdk.io/math"
-	storetypes "cosmossdk.io/store/types"
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	"github.com/cosmos/cosmos-sdk/codec/address"
 	"github.com/cosmos/cosmos-sdk/runtime"
+	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	"github.com/cosmos/cosmos-sdk/testutil"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -26,9 +26,10 @@ import (
 )
 
 var (
-	bondedAcc    = authtypes.NewEmptyModuleAccount(stakingtypes.BondedPoolName)
-	notBondedAcc = authtypes.NewEmptyModuleAccount(stakingtypes.NotBondedPoolName)
-	PKs          = simtestutil.CreateTestPubKeys(500)
+	bondedAcc         = authtypes.NewEmptyModuleAccount(stakingtypes.BondedPoolName)
+	notBondedAcc      = authtypes.NewEmptyModuleAccount(stakingtypes.NotBondedPoolName)
+	keyRotationFeeAcc = authtypes.NewEmptyModuleAccount(stakingtypes.KeyRotationFeePoolName)
+	PKs               = simtestutil.CreateTestPubKeys(500)
 )
 
 type KeeperTestSuite struct {
@@ -54,6 +55,7 @@ func (s *KeeperTestSuite) SetupTest() {
 	accountKeeper := stakingtestutil.NewMockAccountKeeper(ctrl)
 	accountKeeper.EXPECT().GetModuleAddress(stakingtypes.BondedPoolName).Return(bondedAcc.GetAddress())
 	accountKeeper.EXPECT().GetModuleAddress(stakingtypes.NotBondedPoolName).Return(notBondedAcc.GetAddress())
+	accountKeeper.EXPECT().GetModuleAddress(stakingtypes.KeyRotationFeePoolName).Return(keyRotationFeeAcc.GetAddress())
 	accountKeeper.EXPECT().AddressCodec().Return(address.NewBech32Codec("cosmos")).AnyTimes()
 
 	bankKeeper := stakingtestutil.NewMockBankKeeper(ctrl)

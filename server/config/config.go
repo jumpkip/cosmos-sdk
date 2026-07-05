@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 
-	pruningtypes "cosmossdk.io/store/pruning/types"
-
+	pruningtypes "github.com/cosmos/cosmos-sdk/store/v2/pruning/types"
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
@@ -17,6 +17,16 @@ import (
 
 const (
 	defaultMinGasPrices = ""
+
+	// DefaultBlockExecutor is the default transaction executor for block execution.
+	DefaultBlockExecutor = BlockExecutorSequential
+
+	// DefaultBlockSTMWorkers is the default worker count for block-stm execution.
+	// 0 means auto-detect based on CPU in the app wiring.
+	DefaultBlockSTMWorkers = 0
+
+	// DefaultBlockSTMPreEstimate controls whether block-stm pre-estimation is enabled by default.
+	DefaultBlockSTMPreEstimate = false
 
 	// DefaultAPIAddress defines the default address to bind the API server to.
 	DefaultAPIAddress = "tcp://localhost:1317"
@@ -33,6 +43,13 @@ const (
 	DefaultGRPCMaxSendMsgSize = math.MaxInt32
 )
 
+const (
+	BlockExecutorSequential = "sequential"
+	BlockExecutorBlockSTM   = "block-stm"
+)
+
+var blockExecutors = []string{BlockExecutorSequential, BlockExecutorBlockSTM}
+
 // BaseConfig defines the server's basic configuration
 type BaseConfig struct {
 	// The minimum gas prices a validator is willing to accept for processing a
@@ -43,6 +60,16 @@ type BaseConfig struct {
 	// The maximum amount of gas a grpc/Rest query may consume.
 	// If set to 0, it is unbounded.
 	QueryGasLimit uint64 `mapstructure:"query-gas-limit"`
+
+	// BlockExecutor selects the block transaction execution strategy.
+	BlockExecutor string `mapstructure:"block-executor"`
+
+	// BlockSTMWorkers is the worker count for block-stm execution.
+	// 0 means auto-detect based on CPU in app wiring.
+	BlockSTMWorkers int `mapstructure:"block-stm-workers"`
+
+	// BlockSTMPreEstimate enables pre-estimation for block-stm execution.
+	BlockSTMPreEstimate bool `mapstructure:"block-stm-pre-estimate"`
 
 	Pruning           string `mapstructure:"pruning"`
 	PruningKeepRecent string `mapstructure:"pruning-keep-recent"`
@@ -209,8 +236,8 @@ type (
 type Config struct {
 	BaseConfig `mapstructure:",squash"`
 
-	// Telemetry defines the application telemetry configuration
-	Telemetry telemetry.Config `mapstructure:"telemetry"`
+	// Deprecated: Use OpenTelemetry instead, see the `telemetry` package for more details.
+	Telemetry telemetry.Config `mapstructure:"telemetry"` //nolint:staticcheck // TODO: switch to OpenTelemetry
 	API       APIConfig        `mapstructure:"api"`
 	GRPC      GRPCConfig       `mapstructure:"grpc"`
 	GRPCWeb   GRPCWebConfig    `mapstructure:"grpc-web"`
@@ -244,6 +271,9 @@ func DefaultConfig() *Config {
 		BaseConfig: BaseConfig{
 			MinGasPrices:        defaultMinGasPrices,
 			QueryGasLimit:       0,
+			BlockExecutor:       DefaultBlockExecutor,
+			BlockSTMWorkers:     DefaultBlockSTMWorkers,
+			BlockSTMPreEstimate: DefaultBlockSTMPreEstimate,
 			InterBlockCache:     true,
 			Pruning:             pruningtypes.PruningOptionDefault,
 			PruningKeepRecent:   "0",
@@ -254,6 +284,7 @@ func DefaultConfig() *Config {
 			IAVLDisableFastNode: false,
 			AppDBBackend:        "",
 		},
+		//nolint:staticcheck // TODO: switch to OpenTelemetry
 		Telemetry: telemetry.Config{
 			Enabled:      false,
 			GlobalLabels: [][]string{},
@@ -314,6 +345,14 @@ func GetConfig(v *viper.Viper) (Config, error) {
 				return Config{}, fmt.Errorf("invalid block range [%d, %d] for address %s: start block must be <= end block",
 					blockRange[0], blockRange[1], address)
 			}
+			for existingRange, existingAddr := range historicalGRPCAddressBlockRange {
+				if rangesOverlap(existingRange, blockRange) {
+					return Config{}, fmt.Errorf(
+						"historical gRPC block range [%d, %d] for address %s overlaps with existing range [%d, %d] for address %s",
+						blockRange[0], blockRange[1], address, existingRange[0], existingRange[1], existingAddr,
+					)
+				}
+			}
 			historicalGRPCAddressBlockRange[blockRange] = address
 		}
 		conf.GRPC.HistoricalGRPCAddressBlockRange = historicalGRPCAddressBlockRange
@@ -321,11 +360,24 @@ func GetConfig(v *viper.Viper) (Config, error) {
 	return *conf, nil
 }
 
+func rangesOverlap(a, b BlockRange) bool {
+	return a[1] >= b[0] && a[0] <= b[1]
+}
+
 // ValidateBasic returns an error if min-gas-prices field is empty in BaseConfig. Otherwise, it returns nil.
 func (c Config) ValidateBasic() error {
 	if c.MinGasPrices == "" {
 		return sdkerrors.ErrAppConfig.Wrap("set min gas price in app.toml or flag or env variable")
 	}
+
+	if !slices.Contains(blockExecutors, c.BlockExecutor) {
+		return sdkerrors.ErrAppConfig.Wrapf("invalid block executor %q, available types: %v", c.BlockExecutor, blockExecutors)
+	}
+
+	if c.BlockSTMWorkers < 0 {
+		return sdkerrors.ErrAppConfig.Wrapf("invalid block-stm-workers %d: must be >= 0", c.BlockSTMWorkers)
+	}
+
 	if c.Pruning == pruningtypes.PruningOptionEverything && c.StateSync.SnapshotInterval > 0 {
 		return sdkerrors.ErrAppConfig.Wrapf(
 			"cannot enable state sync snapshots with '%s' pruning setting", pruningtypes.PruningOptionEverything,

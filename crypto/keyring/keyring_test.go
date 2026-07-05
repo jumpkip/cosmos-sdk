@@ -1514,14 +1514,14 @@ func TestAltKeyring_KeyByAddress(t *testing.T) {
 		name        string
 		backend     string
 		uid         string
-		getAddres   func(*Record) (sdk.AccAddress, error)
+		getAddress  func(*Record) (sdk.AccAddress, error)
 		expectedErr error
 	}{
 		{
 			name:    "correct get",
 			backend: BackendTest,
 			uid:     "okTest",
-			getAddres: func(k *Record) (sdk.AccAddress, error) {
+			getAddress: func(k *Record) (sdk.AccAddress, error) {
 				return k.GetAddress()
 			},
 			expectedErr: nil,
@@ -1530,7 +1530,7 @@ func TestAltKeyring_KeyByAddress(t *testing.T) {
 			name:    "not found key",
 			backend: BackendTest,
 			uid:     "notFoundUid",
-			getAddres: func(k *Record) (sdk.AccAddress, error) {
+			getAddress: func(k *Record) (sdk.AccAddress, error) {
 				return nil, nil
 			},
 			expectedErr: sdkerrors.ErrKeyNotFound,
@@ -1543,7 +1543,7 @@ func TestAltKeyring_KeyByAddress(t *testing.T) {
 
 			mnemonic, _, err := kr.NewMnemonic(tt.uid, English, sdk.FullFundraiserPath, DefaultBIP39Passphrase, hd.Secp256k1)
 			require.NoError(t, err)
-			addr, err := tt.getAddres(mnemonic)
+			addr, err := tt.getAddress(mnemonic)
 			require.NoError(t, err)
 
 			key, err := kr.KeyByAddress(addr)
@@ -1629,14 +1629,14 @@ func TestAltKeyring_DeleteByAddress(t *testing.T) {
 		name        string
 		backend     string
 		uid         string
-		getAddres   func(*Record) (sdk.AccAddress, error)
+		getAddress  func(*Record) (sdk.AccAddress, error)
 		expectedErr error
 	}{
 		{
 			name:    "correct delete",
 			backend: BackendTest,
 			uid:     "okTest",
-			getAddres: func(k *Record) (sdk.AccAddress, error) {
+			getAddress: func(k *Record) (sdk.AccAddress, error) {
 				return k.GetAddress()
 			},
 			expectedErr: nil,
@@ -1645,7 +1645,7 @@ func TestAltKeyring_DeleteByAddress(t *testing.T) {
 			name:    "not found",
 			backend: BackendTest,
 			uid:     "notFoundUid",
-			getAddres: func(k *Record) (sdk.AccAddress, error) {
+			getAddress: func(k *Record) (sdk.AccAddress, error) {
 				return nil, nil
 			},
 			expectedErr: sdkerrors.ErrKeyNotFound,
@@ -1654,7 +1654,7 @@ func TestAltKeyring_DeleteByAddress(t *testing.T) {
 			name:    "in memory correct delete",
 			backend: BackendMemory,
 			uid:     "inMemory",
-			getAddres: func(k *Record) (sdk.AccAddress, error) {
+			getAddress: func(k *Record) (sdk.AccAddress, error) {
 				return k.GetAddress()
 			},
 			expectedErr: nil,
@@ -1663,7 +1663,7 @@ func TestAltKeyring_DeleteByAddress(t *testing.T) {
 			name:    "in memory not found",
 			backend: BackendMemory,
 			uid:     "inMemoryNotFoundUid",
-			getAddres: func(k *Record) (sdk.AccAddress, error) {
+			getAddress: func(k *Record) (sdk.AccAddress, error) {
 				return nil, nil
 			},
 			expectedErr: sdkerrors.ErrKeyNotFound,
@@ -1676,7 +1676,7 @@ func TestAltKeyring_DeleteByAddress(t *testing.T) {
 
 			mnemonic, _, err := kr.NewMnemonic(tt.uid, English, sdk.FullFundraiserPath, DefaultBIP39Passphrase, hd.Secp256k1)
 			require.NoError(t, err)
-			addr, err := tt.getAddres(mnemonic)
+			addr, err := tt.getAddress(mnemonic)
 			require.NoError(t, err)
 
 			err = kr.DeleteByAddress(addr)
@@ -2081,6 +2081,74 @@ func assertKeysExist(t *testing.T, kr Keyring, names ...string) {
 		_, err := kr.Key(n)
 		require.NoError(t, err)
 	}
+}
+
+func TestNewMnemonicMlDsa65(t *testing.T) {
+	cdc := getCodec()
+	kb := NewInMemory(cdc)
+
+	// Assert hd.MlDsa65 is among the supported algorithms.
+	algos, _ := kb.SupportedAlgorithms()
+	require.True(t, algos.Contains(hd.MlDsa65), "expected hd.MlDsa65 in SupportedAlgos")
+
+	// Create a new mnemonic-backed ML-DSA-65 key.
+	rec, mnemonic, err := kb.NewMnemonic("mldsa", English, sdk.FullFundraiserPath, DefaultBIP39Passphrase, hd.MlDsa65)
+	require.NoError(t, err)
+	require.NotEmpty(t, mnemonic)
+
+	// Get the pubkey from the new record.
+	pub, err := rec.GetPubKey()
+	require.NoError(t, err)
+	require.Equal(t, "ml_dsa_65", pub.Type())
+	require.Len(t, pub.Address(), 20)
+
+	// Re-read the key by name; verify address and key stability.
+	rec2, err := kb.Key("mldsa")
+	require.NoError(t, err)
+	pub2, err := rec2.GetPubKey()
+	require.NoError(t, err)
+	require.True(t, pub.Equals(pub2))
+}
+
+func TestMlDsa65SignVerifyThroughKeyring(t *testing.T) {
+	cdc := getCodec()
+	kb := NewInMemory(cdc)
+
+	rec, _, err := kb.NewMnemonic("mldsa-signer", English, sdk.FullFundraiserPath, DefaultBIP39Passphrase, hd.MlDsa65)
+	require.NoError(t, err)
+
+	msg := []byte("sign me with a post-quantum key")
+	sig, pub, err := kb.Sign("mldsa-signer", msg, signing.SignMode_SIGN_MODE_DIRECT)
+	require.NoError(t, err)
+	require.Equal(t, "ml_dsa_65", pub.Type())
+	require.True(t, pub.VerifySignature(msg, sig))
+
+	recPub, err := rec.GetPubKey()
+	require.NoError(t, err)
+	require.True(t, pub.Equals(recPub))
+}
+
+func TestImportPrivKeyHexMlDsa65WrongLength(t *testing.T) {
+	kb := NewInMemory(getCodec())
+	// 31 bytes -> 62 hex chars; not a valid 32-byte ML-DSA-65 seed.
+	badHex := strings.Repeat("ab", 31)
+	require.NotPanics(t, func() {
+		err := kb.ImportPrivKeyHex("bad", badHex, string(hd.MlDsa65Type))
+		require.Error(t, err)
+	})
+}
+
+func TestImportPrivKeyHexMlDsa65Valid(t *testing.T) {
+	kb := NewInMemory(getCodec())
+	seedHex := strings.Repeat("11", 32) // 32 bytes
+	err := kb.ImportPrivKeyHex("good", seedHex, string(hd.MlDsa65Type))
+	require.NoError(t, err)
+
+	rec, err := kb.Key("good")
+	require.NoError(t, err)
+	pub, err := rec.GetPubKey()
+	require.NoError(t, err)
+	require.Equal(t, "ml_dsa_65", pub.Type())
 }
 
 func accAddr(k *Record) (sdk.AccAddress, error) { return k.GetAddress() }

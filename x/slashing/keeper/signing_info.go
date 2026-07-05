@@ -2,13 +2,14 @@ package keeper
 
 import (
 	"context"
+	stderrors "errors"
 	"time"
 
 	"github.com/bits-and-blooms/bitset"
 
 	"cosmossdk.io/errors"
-	storetypes "cosmossdk.io/store/types"
 
+	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/slashing/types"
 )
@@ -50,6 +51,32 @@ func (k Keeper) SetValidatorSigningInfo(ctx context.Context, address sdk.ConsAdd
 	return store.Set(types.ValidatorSigningInfoKey(address), bz)
 }
 
+// DeleteValidatorSigningInfo deletes the signing info for a consensus address.
+func (k Keeper) DeleteValidatorSigningInfo(ctx context.Context, address sdk.ConsAddress) error {
+	store := k.storeService.OpenKVStore(ctx)
+	return store.Delete(types.ValidatorSigningInfoKey(address))
+}
+
+// MoveValidatorSigningInfo moves signing info from one consensus address to
+// another.
+func (k Keeper) MoveValidatorSigningInfo(ctx context.Context, oldAddr, newAddr sdk.ConsAddress) error {
+	info, err := k.GetValidatorSigningInfo(ctx, oldAddr)
+	if err != nil {
+		if errors.IsOf(err, types.ErrNoSigningInfoFound) {
+			// validators can rotate before they have ever bonded, in which
+			// case slashing has no signing info to move yet
+			return nil
+		}
+		return err
+	}
+
+	info.Address = newAddr.String()
+	if err := k.SetValidatorSigningInfo(ctx, newAddr, info); err != nil {
+		return err
+	}
+	return k.DeleteValidatorSigningInfo(ctx, oldAddr)
+}
+
 // IterateValidatorSigningInfos iterates over the stored ValidatorSigningInfo
 func (k Keeper) IterateValidatorSigningInfos(ctx context.Context,
 	handler func(address sdk.ConsAddress, info types.ValidatorSigningInfo) (stop bool),
@@ -76,7 +103,7 @@ func (k Keeper) IterateValidatorSigningInfos(ctx context.Context,
 }
 
 // JailUntil attempts to set a validator's JailedUntil attribute in its signing
-// info. It will panic if the signing info does not exist for the validator.
+// info. It returns an error if the signing info does not exist for the validator.
 func (k Keeper) JailUntil(ctx context.Context, consAddr sdk.ConsAddress, jailTime time.Time) error {
 	signInfo, err := k.GetValidatorSigningInfo(ctx, consAddr)
 	if err != nil {
@@ -87,8 +114,8 @@ func (k Keeper) JailUntil(ctx context.Context, consAddr sdk.ConsAddress, jailTim
 	return k.SetValidatorSigningInfo(ctx, consAddr, signInfo)
 }
 
-// Tombstone attempts to tombstone a validator. It will panic if signing info for
-// the given validator does not exist.
+// Tombstone attempts to tombstone a validator. It returns an error if signing info for
+// the given validator does not exist or if the validator is already tombstoned.
 func (k Keeper) Tombstone(ctx context.Context, consAddr sdk.ConsAddress) error {
 	signInfo, err := k.GetValidatorSigningInfo(ctx, consAddr)
 	if err != nil {
@@ -209,6 +236,53 @@ func (k Keeper) DeleteMissedBlockBitmap(ctx context.Context, addr sdk.ConsAddres
 	for ; iter.Valid(); iter.Next() {
 		err = store.Delete(iter.Key())
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MoveMissedBlockBitmap moves missed block bitmap chunks from one consensus
+// address to another.
+func (k Keeper) MoveMissedBlockBitmap(ctx context.Context, oldAddr, newAddr sdk.ConsAddress) (err error) {
+	store := k.storeService.OpenKVStore(ctx)
+	oldPrefix := types.ValidatorMissedBlockBitmapPrefixKey(oldAddr)
+	newPrefix := types.ValidatorMissedBlockBitmapPrefixKey(newAddr)
+
+	iter, err := store.Iterator(oldPrefix, storetypes.PrefixEndBytes(oldPrefix))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = stderrors.Join(err, iter.Close())
+	}()
+
+	type bitmapChunk struct {
+		oldKey []byte
+		newKey []byte
+		value  []byte
+	}
+
+	// collect chunks so we dont delete while iterating
+	var chunks []bitmapChunk
+	for ; iter.Valid(); iter.Next() {
+		// old key is the old consensus address + bitmap chunk index
+		oldKey := append([]byte(nil), iter.Key()...)
+
+		// new key is the new consensus address + bitmap chunk index (remove
+		// old prefix from the old key to just get the chunk index)
+		newKey := append(append([]byte(nil), newPrefix...), oldKey[len(oldPrefix):]...)
+
+		value := append([]byte(nil), iter.Value()...)
+		chunks = append(chunks, bitmapChunk{oldKey: oldKey, newKey: newKey, value: value})
+	}
+
+	// move chunks to new key, remove old key
+	for _, chunk := range chunks {
+		if err := store.Set(chunk.newKey, chunk.value); err != nil {
+			return err
+		}
+		if err := store.Delete(chunk.oldKey); err != nil {
 			return err
 		}
 	}

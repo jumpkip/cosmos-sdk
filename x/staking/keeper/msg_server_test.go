@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"go.uber.org/mock/gomock"
 
 	"cosmossdk.io/math"
@@ -11,6 +12,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec/address"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
+	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -28,21 +31,22 @@ func (s *KeeperTestSuite) execExpectCalls() {
 }
 
 func (s *KeeperTestSuite) TestMsgCreateValidator() {
-	ctx, msgServer := s.ctx, s.msgServer
-	require := s.Require()
-	s.execExpectCalls()
-
 	pk1 := ed25519.GenPrivKey().PubKey()
-	require.NotNil(pk1)
+	s.Require().NotNil(pk1)
+	pubkey1, err := codectypes.NewAnyWithValue(pk1)
+	s.Require().NoError(err)
 
-	pubkey, err := codectypes.NewAnyWithValue(pk1)
-	require.NoError(err)
+	pk2 := ed25519.GenPrivKey().PubKey()
+	s.Require().NotNil(pk2)
+	pubkey2, err := codectypes.NewAnyWithValue(pk2)
+	s.Require().NoError(err)
 
 	testCases := []struct {
-		name      string
-		input     *stakingtypes.MsgCreateValidator
-		expErr    bool
-		expErrMsg string
+		name               string
+		setupExistingState func() error
+		input              *stakingtypes.MsgCreateValidator
+		expErr             bool
+		expErrMsg          string
 	}{
 		{
 			name: "empty description",
@@ -56,7 +60,7 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(1),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  ValAddr.String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.NewInt64Coin("stake", 10000),
 			},
 			expErr:    true,
@@ -76,7 +80,7 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(1),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  sdk.AccAddress([]byte("invalid")).String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.NewInt64Coin("stake", 10000),
 			},
 			expErr:    true,
@@ -116,7 +120,7 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(1),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  ValAddr.String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.NewInt64Coin("stake", 0),
 			},
 			expErr:    true,
@@ -136,7 +140,7 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(1),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  ValAddr.String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.Coin{},
 			},
 			expErr:    true,
@@ -156,7 +160,7 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(0),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  ValAddr.String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.NewInt64Coin("stake", 10000),
 			},
 			expErr:    true,
@@ -176,7 +180,7 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(-1),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  ValAddr.String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.NewInt64Coin("stake", 10000),
 			},
 			expErr:    true,
@@ -196,11 +200,84 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(100),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  ValAddr.String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.NewInt64Coin("stake", 10),
 			},
 			expErr:    true,
 			expErrMsg: "validator's self delegation must be greater than their minimum self delegation",
+		},
+		{
+			name: "consensus key is target of pending rotation",
+			setupExistingState: func() error {
+				valAddr := sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address())
+				return s.stakingKeeper.SetConsKeyRotation(s.ctx, valAddr, ed25519.GenPrivKey().PubKey(), pk2)
+			},
+			input: &stakingtypes.MsgCreateValidator{
+				Description: stakingtypes.Description{
+					Moniker: "NewValidator",
+				},
+				Commission: stakingtypes.CommissionRates{
+					Rate:          math.LegacyNewDecWithPrec(5, 1),
+					MaxRate:       math.LegacyNewDecWithPrec(5, 1),
+					MaxChangeRate: math.LegacyNewDec(0),
+				},
+				MinSelfDelegation: math.NewInt(1),
+				DelegatorAddress:  Addr.String(),
+				ValidatorAddress:  sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address()).String(),
+				Pubkey:            pubkey2,
+				Value:             sdk.NewInt64Coin("stake", 10000),
+			},
+			expErr:    true,
+			expErrMsg: stakingtypes.ErrConsensusPubKeyInRotationHistory.Error(),
+		},
+		{
+			name: "consensus key is source of pending rotation without live validator index",
+			setupExistingState: func() error {
+				valAddr := sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address())
+				return s.stakingKeeper.SetConsKeyRotation(s.ctx, valAddr, pk2, ed25519.GenPrivKey().PubKey())
+			},
+			input: &stakingtypes.MsgCreateValidator{
+				Description: stakingtypes.Description{
+					Moniker: "NewValidator",
+				},
+				Commission: stakingtypes.CommissionRates{
+					Rate:          math.LegacyNewDecWithPrec(5, 1),
+					MaxRate:       math.LegacyNewDecWithPrec(5, 1),
+					MaxChangeRate: math.LegacyNewDec(0),
+				},
+				MinSelfDelegation: math.NewInt(1),
+				DelegatorAddress:  Addr.String(),
+				ValidatorAddress:  sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address()).String(),
+				Pubkey:            pubkey2,
+				Value:             sdk.NewInt64Coin("stake", 10000),
+			},
+			expErr:    true,
+			expErrMsg: stakingtypes.ErrConsensusPubKeyInRotationHistory.Error(),
+		},
+		{
+			name: "consensus key was rotated away from",
+			setupExistingState: func() error {
+				valAddr := sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address())
+				consAddr := sdk.ConsAddress(pk2.Address())
+				return s.stakingKeeper.SetRotationLockedConsAddr(s.ctx, consAddr, valAddr, stakingtypes.ConsAddrLockRotatedFrom)
+			},
+			input: &stakingtypes.MsgCreateValidator{
+				Description: stakingtypes.Description{
+					Moniker: "NewValidator",
+				},
+				Commission: stakingtypes.CommissionRates{
+					Rate:          math.LegacyNewDecWithPrec(5, 1),
+					MaxRate:       math.LegacyNewDecWithPrec(5, 1),
+					MaxChangeRate: math.LegacyNewDec(0),
+				},
+				MinSelfDelegation: math.NewInt(1),
+				DelegatorAddress:  Addr.String(),
+				ValidatorAddress:  sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address()).String(),
+				Pubkey:            pubkey2,
+				Value:             sdk.NewInt64Coin("stake", 10000),
+			},
+			expErr:    true,
+			expErrMsg: stakingtypes.ErrConsensusPubKeyInRotationHistory.Error(),
 		},
 		{
 			name: "valid msg",
@@ -220,7 +297,7 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 				MinSelfDelegation: math.NewInt(1),
 				DelegatorAddress:  Addr.String(),
 				ValidatorAddress:  ValAddr.String(),
-				Pubkey:            pubkey,
+				Pubkey:            pubkey1,
 				Value:             sdk.NewInt64Coin("stake", 10000),
 			},
 			expErr: false,
@@ -228,12 +305,19 @@ func (s *KeeperTestSuite) TestMsgCreateValidator() {
 	}
 	for _, tc := range testCases {
 		s.T().Run(tc.name, func(t *testing.T) {
-			_, err := msgServer.CreateValidator(ctx, tc.input)
+			s.SetupTest()
+			s.execExpectCalls()
+
+			if tc.setupExistingState != nil {
+				s.Require().NoError(tc.setupExistingState())
+			}
+
+			_, err := s.msgServer.CreateValidator(s.ctx, tc.input)
 			if tc.expErr {
-				require.Error(err)
-				require.Contains(err.Error(), tc.expErrMsg)
+				s.Require().Error(err)
+				s.Require().Contains(err.Error(), tc.expErrMsg)
 			} else {
-				require.NoError(err)
+				s.Require().NoError(err)
 			}
 		})
 	}
@@ -339,7 +423,7 @@ func (s *KeeperTestSuite) TestMsgEditValidator() {
 				MinSelfDelegation: &newSelfDel,
 			},
 			expErr:    true,
-			expErrMsg: "validator does not exist",
+			expErrMsg: stakingtypes.ErrNoValidatorFound.Error(),
 		},
 		{
 			name: "change commission rate in <24hrs",
@@ -353,7 +437,7 @@ func (s *KeeperTestSuite) TestMsgEditValidator() {
 				MinSelfDelegation: &newSelfDel,
 			},
 			expErr:    true,
-			expErrMsg: "commission cannot be changed more than once in 24h",
+			expErrMsg: stakingtypes.ErrCommissionUpdateTime.Error(),
 		},
 		{
 			name: "minimum self delegation cannot decrease",
@@ -367,7 +451,7 @@ func (s *KeeperTestSuite) TestMsgEditValidator() {
 				MinSelfDelegation: &lowSelfDel,
 			},
 			expErr:    true,
-			expErrMsg: "minimum self delegation cannot be decrease",
+			expErrMsg: stakingtypes.ErrMinSelfDelegationDecreased.Error(),
 		},
 		{
 			name: "validator self-delegation must be greater than min self delegation",
@@ -381,7 +465,7 @@ func (s *KeeperTestSuite) TestMsgEditValidator() {
 				MinSelfDelegation: &highSelfDel,
 			},
 			expErr:    true,
-			expErrMsg: "validator's self delegation must be greater than their minimum self delegation",
+			expErrMsg: stakingtypes.ErrSelfDelegationBelowMinimum.Error(),
 		},
 		{
 			name: "valid msg",
@@ -995,6 +1079,7 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 		input     *stakingtypes.MsgUpdateParams
 		expErr    bool
 		expErrMsg string
+		setup     func()
 	}{
 		{
 			name: "valid params",
@@ -1003,6 +1088,9 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 				Params:    stakingtypes.DefaultParams(),
 			},
 			expErr: false,
+			setup: func() {
+				s.bankKeeper.EXPECT().GetSupply(gomock.Any(), stakingtypes.DefaultParams().BondDenom).Return(sdk.NewInt64Coin(stakingtypes.DefaultParams().BondDenom, 1000000))
+			},
 		},
 		{
 			name: "invalid authority",
@@ -1024,6 +1112,7 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 					MaxEntries:        stakingtypes.DefaultMaxEntries,
 					HistoricalEntries: stakingtypes.DefaultHistoricalEntries,
 					BondDenom:         stakingtypes.BondStatusBonded,
+					KeyRotationFee:    stakingtypes.DefaultKeyRotationFee,
 				},
 			},
 			expErr:    true,
@@ -1040,6 +1129,7 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 					MaxEntries:        stakingtypes.DefaultMaxEntries,
 					HistoricalEntries: stakingtypes.DefaultHistoricalEntries,
 					BondDenom:         stakingtypes.BondStatusBonded,
+					KeyRotationFee:    stakingtypes.DefaultKeyRotationFee,
 				},
 			},
 			expErr:    true,
@@ -1056,10 +1146,31 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 					MaxEntries:        stakingtypes.DefaultMaxEntries,
 					HistoricalEntries: stakingtypes.DefaultHistoricalEntries,
 					BondDenom:         "",
+					KeyRotationFee:    stakingtypes.DefaultKeyRotationFee,
 				},
 			},
 			expErr:    true,
 			expErrMsg: "bond denom cannot be blank",
+		},
+		{
+			name: "invalid bond denom - zero supply",
+			input: &stakingtypes.MsgUpdateParams{
+				Authority: keeper.GetAuthority(),
+				Params: stakingtypes.Params{
+					MinCommissionRate: stakingtypes.DefaultMinCommissionRate,
+					UnbondingTime:     stakingtypes.DefaultUnbondingTime,
+					MaxValidators:     stakingtypes.DefaultMaxValidators,
+					MaxEntries:        stakingtypes.DefaultMaxEntries,
+					HistoricalEntries: stakingtypes.DefaultHistoricalEntries,
+					BondDenom:         "ghosttoken",
+					KeyRotationFee:    stakingtypes.DefaultKeyRotationFee,
+				},
+			},
+			expErr:    true,
+			expErrMsg: "does not exist or has zero supply",
+			setup: func() {
+				s.bankKeeper.EXPECT().GetSupply(gomock.Any(), "ghosttoken").Return(sdk.NewInt64Coin("ghosttoken", 0))
+			},
 		},
 		{
 			name: "max validators must be positive",
@@ -1072,6 +1183,7 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 					MaxEntries:        stakingtypes.DefaultMaxEntries,
 					HistoricalEntries: stakingtypes.DefaultHistoricalEntries,
 					BondDenom:         stakingtypes.BondStatusBonded,
+					KeyRotationFee:    stakingtypes.DefaultKeyRotationFee,
 				},
 			},
 			expErr:    true,
@@ -1088,6 +1200,7 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 					MaxEntries:        0,
 					HistoricalEntries: stakingtypes.DefaultHistoricalEntries,
 					BondDenom:         stakingtypes.BondStatusBonded,
+					KeyRotationFee:    stakingtypes.DefaultKeyRotationFee,
 				},
 			},
 			expErr:    true,
@@ -1104,6 +1217,7 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 					HistoricalEntries: stakingtypes.DefaultHistoricalEntries,
 					MinCommissionRate: stakingtypes.DefaultMinCommissionRate,
 					BondDenom:         "denom",
+					KeyRotationFee:    stakingtypes.DefaultKeyRotationFee,
 				},
 			},
 			expErr:    true,
@@ -1113,6 +1227,11 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 
 	for _, tc := range testCases {
 		s.T().Run(tc.name, func(t *testing.T) {
+			// Setup mocks if specified
+			if tc.setup != nil {
+				tc.setup()
+			}
+
 			_, err := msgServer.UpdateParams(ctx, tc.input)
 			if tc.expErr {
 				require.Error(err)
@@ -1122,4 +1241,233 @@ func (s *KeeperTestSuite) TestMsgUpdateParams() {
 			}
 		})
 	}
+}
+
+func (s *KeeperTestSuite) TestMsgRotateConsPubKey() {
+	require := s.Require()
+
+	newAny := func(pk cryptotypes.PubKey) *codectypes.Any {
+		a, err := codectypes.NewAnyWithValue(pk)
+		require.NoError(err)
+		return a
+	}
+
+	createValidator := func(status stakingtypes.BondStatus) (sdk.ValAddress, cryptotypes.PubKey) {
+		pk := ed25519.GenPrivKey().PubKey()
+		valAddr := sdk.ValAddress(pk.Address())
+		v, err := stakingtypes.NewValidator(valAddr.String(), pk, stakingtypes.Description{Moniker: "v"})
+		require.NoError(err)
+		v.Status = status
+		require.NoError(s.stakingKeeper.SetValidator(s.ctx, v))
+		require.NoError(s.stakingKeeper.SetValidatorByConsAddr(s.ctx, v))
+		return valAddr, pk
+	}
+
+	testCases := []struct {
+		name                   string
+		newRotateConsPubKeyMsg func() *stakingtypes.MsgRotateConsPubKey
+		expErr                 string
+	}{
+		{
+			name: "invalid validator address",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: "invalid",
+					NewPubkey:        newAny(ed25519.GenPrivKey().PubKey()),
+				}
+			},
+			expErr: "invalid validator address",
+		},
+		{
+			name: "new pubkey has unsupported type",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				s.ctx = s.ctx.WithConsensusParams(cmtproto.ConsensusParams{
+					Validator: &cmtproto.ValidatorParams{PubKeyTypes: []string{ed25519.KeyType}},
+				})
+				valAddr, _ := createValidator(stakingtypes.Bonded)
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(secp256k1.GenPrivKey().PubKey()),
+				}
+			},
+			expErr: stakingtypes.ErrValidatorPubKeyTypeNotSupported.Error(),
+		},
+		{
+			name: "validator not found",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				missing := sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address())
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: missing.String(),
+					NewPubkey:        newAny(ed25519.GenPrivKey().PubKey()),
+				}
+			},
+			expErr: stakingtypes.ErrNoValidatorFound.Error(),
+		},
+		{
+			name: "validator jailed",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				valAddr, _ := createValidator(stakingtypes.Bonded)
+				v, err := s.stakingKeeper.GetValidator(s.ctx, valAddr)
+				require.NoError(err)
+				v.Jailed = true
+				require.NoError(s.stakingKeeper.SetValidator(s.ctx, v))
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(ed25519.GenPrivKey().PubKey()),
+				}
+			},
+			expErr: "validator is jailed",
+		},
+		{
+			name: "new pubkey already used by another validator",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				valAddr, _ := createValidator(stakingtypes.Bonded)
+				_, occupiedPk := createValidator(stakingtypes.Bonded)
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(occupiedPk),
+				}
+			},
+			expErr: stakingtypes.ErrConsensusPubKeyAlreadyUsedForValidator.Error(),
+		},
+		{
+			name: "new pubkey in rotation history",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				valAddr, _ := createValidator(stakingtypes.Bonded)
+				oldPubKey := ed25519.GenPrivKey().PubKey()
+				dummy := sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address())
+				require.NoError(s.stakingKeeper.SetConsKeyRotation(s.ctx, dummy, oldPubKey, ed25519.GenPrivKey().PubKey()))
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(oldPubKey),
+				}
+			},
+			expErr: stakingtypes.ErrConsensusPubKeyInRotationHistory.Error(),
+		},
+		{
+			name: "new pubkey is the target of another pending rotation",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				valAddr, _ := createValidator(stakingtypes.Bonded)
+				targetPubKey := ed25519.GenPrivKey().PubKey()
+				dummy := sdk.ValAddress(ed25519.GenPrivKey().PubKey().Address())
+				require.NoError(s.stakingKeeper.SetConsKeyRotation(s.ctx, dummy, ed25519.GenPrivKey().PubKey(), targetPubKey))
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(targetPubKey),
+				}
+			},
+			expErr: stakingtypes.ErrConsensusPubKeyInRotationHistory.Error(),
+		},
+		{
+			name: "valid msg",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				valAddr, _ := createValidator(stakingtypes.Bonded)
+				params, err := s.stakingKeeper.GetParams(s.ctx)
+				require.NoError(err)
+				params.KeyRotationFee = sdk.NewInt64Coin(params.BondDenom, 1234)
+				require.NoError(s.stakingKeeper.SetParams(s.ctx, params))
+				feeCoins := sdk.NewCoins(params.KeyRotationFee)
+				s.bankKeeper.EXPECT().
+					SendCoinsFromAccountToModule(gomock.Any(), sdk.AccAddress(valAddr), stakingtypes.KeyRotationFeePoolName, feeCoins).
+					Return(nil)
+				s.bankKeeper.EXPECT().
+					BurnCoins(gomock.Any(), stakingtypes.KeyRotationFeePoolName, feeCoins).
+					Return(nil)
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(ed25519.GenPrivKey().PubKey()),
+				}
+			},
+			expErr: "",
+		},
+		{
+			name: "exceeds max rotations (1)",
+			newRotateConsPubKeyMsg: func() *stakingtypes.MsgRotateConsPubKey {
+				// submit a valid rotation for valAddr
+				valAddr, _ := createValidator(stakingtypes.Bonded)
+				feeCoins := sdk.NewCoins(stakingtypes.DefaultKeyRotationFee)
+				s.bankKeeper.EXPECT().
+					SendCoinsFromAccountToModule(gomock.Any(), sdk.AccAddress(valAddr), stakingtypes.KeyRotationFeePoolName, feeCoins).
+					Return(nil)
+				s.bankKeeper.EXPECT().
+					BurnCoins(gomock.Any(), stakingtypes.KeyRotationFeePoolName, feeCoins).
+					Return(nil)
+				valid := &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(ed25519.GenPrivKey().PubKey()),
+				}
+				_, err := s.msgServer.RotateConsPubKey(s.ctx, valid)
+				require.NoError(err)
+
+				// try and rotate again
+				return &stakingtypes.MsgRotateConsPubKey{
+					ValidatorAddress: valAddr.String(),
+					NewPubkey:        newAny(ed25519.GenPrivKey().PubKey()),
+				}
+			},
+			expErr: stakingtypes.ErrExceedingMaxConsPubKeyRotations.Error(),
+		},
+	}
+
+	for _, tc := range testCases {
+		s.T().Run(tc.name, func(t *testing.T) {
+			s.SetupTest()
+
+			msg := tc.newRotateConsPubKeyMsg()
+			_, err := s.msgServer.RotateConsPubKey(s.ctx, msg)
+			if tc.expErr != "" {
+				require.Error(err)
+				require.Contains(err.Error(), tc.expErr)
+				return
+			}
+			require.NoError(err)
+		})
+	}
+}
+
+func (s *KeeperTestSuite) TestUpdateParamsAuthority() {
+	ctx, keeper, msgServer := s.ctx, s.stakingKeeper, s.msgServer
+	require := s.Require()
+
+	keeperAuthority := keeper.GetAuthority()
+	overrideAuthority := sdk.AccAddress("override_authority___").String()
+	bondDenom := stakingtypes.DefaultParams().BondDenom
+
+	s.Run("fallback to keeper authority", func() {
+		s.bankKeeper.EXPECT().GetSupply(gomock.Any(), bondDenom).Return(sdk.NewCoin(bondDenom, math.NewInt(1000000))).AnyTimes()
+
+		_, err := msgServer.UpdateParams(ctx, &stakingtypes.MsgUpdateParams{
+			Authority: keeperAuthority,
+			Params:    stakingtypes.DefaultParams(),
+		})
+		require.NoError(err)
+
+		_, err = msgServer.UpdateParams(ctx, &stakingtypes.MsgUpdateParams{
+			Authority: overrideAuthority,
+			Params:    stakingtypes.DefaultParams(),
+		})
+		require.Error(err)
+		require.Contains(err.Error(), "invalid authority")
+	})
+
+	s.Run("consensus params authority takes precedence", func() {
+		ctxOverride := ctx.WithConsensusParams(cmtproto.ConsensusParams{
+			Authority: &cmtproto.AuthorityParams{Authority: overrideAuthority},
+		})
+
+		s.bankKeeper.EXPECT().GetSupply(gomock.Any(), bondDenom).Return(sdk.NewCoin(bondDenom, math.NewInt(1000000))).AnyTimes()
+
+		_, err := msgServer.UpdateParams(ctxOverride, &stakingtypes.MsgUpdateParams{
+			Authority: overrideAuthority,
+			Params:    stakingtypes.DefaultParams(),
+		})
+		require.NoError(err)
+
+		_, err = msgServer.UpdateParams(ctxOverride, &stakingtypes.MsgUpdateParams{
+			Authority: keeperAuthority,
+			Params:    stakingtypes.DefaultParams(),
+		})
+		require.Error(err)
+		require.Contains(err.Error(), "invalid authority")
+	})
 }

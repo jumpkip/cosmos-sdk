@@ -151,12 +151,12 @@ func (v Validators) UnpackInterfaces(c codectypes.AnyUnpacker) error {
 	return nil
 }
 
-// MustMarshalValidator returns the redelegation
+// MustMarshalValidator returns the validator bytes
 func MustMarshalValidator(cdc codec.BinaryCodec, validator *Validator) []byte {
 	return cdc.MustMarshal(validator)
 }
 
-// MustUnmarshalValidator unmarshals a redelegation from a store value
+// MustUnmarshalValidator unmarshals a validator from a store value
 func MustUnmarshalValidator(cdc codec.BinaryCodec, value []byte) Validator {
 	validator, err := UnmarshalValidator(cdc, value)
 	if err != nil {
@@ -166,7 +166,7 @@ func MustUnmarshalValidator(cdc codec.BinaryCodec, value []byte) Validator {
 	return validator
 }
 
-// UnmarshalValidator unmarshals a redelegation from a store value
+// UnmarshalValidator unmarshals a validator from a store value
 func UnmarshalValidator(cdc codec.BinaryCodec, value []byte) (v Validator, err error) {
 	err = cdc.Unmarshal(value, &v)
 	return v, err
@@ -271,10 +271,38 @@ func (v Validator) ABCIValidatorUpdate(r math.Int) abci.ValidatorUpdate {
 	}
 }
 
+// ABCIValidatorUpdateWithPubKey returns an abci.ValidatorUpdate from a validator with a
+// custom pub key and the full validator power
+func (v Validator) ABCIValidatorUpdateWithPubKey(r math.Int, pk cryptotypes.PubKey) abci.ValidatorUpdate {
+	tmProtoPk, err := cryptocodec.ToCmtProtoPublicKey(pk)
+	if err != nil {
+		panic(err)
+	}
+
+	return abci.ValidatorUpdate{
+		PubKey: tmProtoPk,
+		Power:  v.ConsensusPower(r),
+	}
+}
+
 // ABCIValidatorUpdateZero returns an abci.ValidatorUpdate from a staking validator type
 // with zero power used for validator updates.
 func (v Validator) ABCIValidatorUpdateZero() abci.ValidatorUpdate {
 	tmProtoPk, err := v.TmConsPublicKey()
+	if err != nil {
+		panic(err)
+	}
+
+	return abci.ValidatorUpdate{
+		PubKey: tmProtoPk,
+		Power:  0,
+	}
+}
+
+// ABCIValidatorUpdateZeroWithPubKey returns an abci.ValidatorUpdate from a validator with a
+// custom pub key and zero validator power.
+func (v Validator) ABCIValidatorUpdateZeroWithPubKey(pk cryptotypes.PubKey) abci.ValidatorUpdate {
+	tmProtoPk, err := cryptocodec.ToCmtProtoPublicKey(pk)
 	if err != nil {
 		panic(err)
 	}

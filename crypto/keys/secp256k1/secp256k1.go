@@ -100,7 +100,8 @@ func genPrivKey(rand io.Reader) []byte {
 
 		d.SetBytes(privKeyBytes[:])
 		// break if we found a valid point (i.e. > 0 and < N == curveOrder)
-		isValidFieldElement := 0 < d.Sign() && d.Cmp(secp256k1.S256().N) < 0
+		// TODO: replace S256().N with secp256k1 package's new API - elliptic.Curve is deprecated (SA1019)
+		isValidFieldElement := 0 < d.Sign() && d.Cmp(secp256k1.S256().N) < 0 //nolint:staticcheck // TODO: migrate off deprecated elliptic.Curve
 		if isValidFieldElement {
 			break
 		}
@@ -128,7 +129,8 @@ func GenPrivKeyFromSecret(secret []byte) *PrivKey {
 	// https://apps.nsa.gov/iaarchive/library/ia-guidance/ia-solutions-for-classified/algorithm-guidance/suite-b-implementers-guide-to-fips-186-3-ecdsa.cfm
 	// see also https://github.com/golang/go/blob/0380c9ad38843d523d9c9804fe300cb7edd7cd3c/src/crypto/ecdsa/ecdsa.go#L89-L101
 	fe := new(big.Int).SetBytes(secHash[:])
-	n := new(big.Int).Sub(secp256k1.S256().N, one)
+	// TODO: replace S256().N with secp256k1 package's new API - elliptic.Curve is deprecated (SA1019)
+	n := new(big.Int).Sub(secp256k1.S256().N, one) //nolint:staticcheck // TODO: migrate off deprecated elliptic.Curve
 	fe.Mod(fe, n)
 	fe.Add(fe, one)
 
@@ -189,6 +191,13 @@ func (pubKey PubKey) MarshalAmino() ([]byte, error) {
 func (pubKey *PubKey) UnmarshalAmino(bz []byte) error {
 	if len(bz) != PubKeySize {
 		return errorsmod.Wrap(errors.ErrInvalidPubKey, "invalid pubkey size")
+	}
+	// A compressed SEC1 point must start with a 0x02 or 0x03 tag byte. The
+	// length check alone lets keys with any other leading byte through even
+	// though they are not valid points (and can never verify a signature), so
+	// also reject an invalid tag here.
+	if bz[0] != 0x02 && bz[0] != 0x03 {
+		return errorsmod.Wrap(errors.ErrInvalidPubKey, "invalid pubkey SEC1 tag")
 	}
 	pubKey.Key = bz
 

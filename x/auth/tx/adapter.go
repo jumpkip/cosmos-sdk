@@ -8,9 +8,9 @@ import (
 	multisigv1beta1 "cosmossdk.io/api/cosmos/crypto/multisig/v1beta1"
 	signingv1beta1 "cosmossdk.io/api/cosmos/tx/signing/v1beta1"
 	txv1beta1 "cosmossdk.io/api/cosmos/tx/v1beta1"
-	txsigning "cosmossdk.io/x/tx/signing"
 
 	"github.com/cosmos/cosmos-sdk/types/tx"
+	txsigning "github.com/cosmos/cosmos-sdk/x/tx/signing"
 )
 
 // GetSigningTxData returns an x/tx/signing.TxData representation of a transaction for use in the signing
@@ -60,12 +60,18 @@ func (w *wrapper) GetSigningTxData() txsigning.TxData {
 		modeInfo := &txv1beta1.ModeInfo{}
 		adaptModeInfo(signerInfo.ModeInfo, modeInfo)
 		txSignerInfo := &txv1beta1.SignerInfo{
-			PublicKey: &anypb.Any{
-				TypeUrl: signerInfo.PublicKey.TypeUrl,
-				Value:   signerInfo.PublicKey.Value,
-			},
 			Sequence: signerInfo.Sequence,
 			ModeInfo: modeInfo,
+		}
+		// PublicKey may legitimately be nil in a SignerInfo (the key can be
+		// omitted when it is already known, e.g. for some multisig sub-signers),
+		// as GetPubKeys already tolerates. Only convert it when present to avoid
+		// a nil pointer dereference.
+		if signerInfo.PublicKey != nil {
+			txSignerInfo.PublicKey = &anypb.Any{
+				TypeUrl: signerInfo.PublicKey.TypeUrl,
+				Value:   signerInfo.PublicKey.Value,
+			}
 		}
 		txSignerInfos[i] = txSignerInfo
 	}

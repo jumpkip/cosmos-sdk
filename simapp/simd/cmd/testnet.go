@@ -237,10 +237,10 @@ func initTestnetFiles(
 	appConfig := srvconfig.DefaultConfig()
 	appConfig.MinGasPrices = args.minGasPrices
 	appConfig.API.Enable = true
-	appConfig.Telemetry.Enabled = true
-	appConfig.Telemetry.PrometheusRetentionTime = 60
-	appConfig.Telemetry.EnableHostnameLabel = false
-	appConfig.Telemetry.GlobalLabels = [][]string{{"chain_id", args.chainID}}
+	appConfig.Telemetry.Enabled = true                                        //nolint:staticcheck // TODO: switch to OpenTelemetry
+	appConfig.Telemetry.PrometheusRetentionTime = 60                          //nolint:staticcheck // TODO: switch to OpenTelemetry
+	appConfig.Telemetry.EnableHostnameLabel = false                           //nolint:staticcheck // TODO: switch to OpenTelemetry
+	appConfig.Telemetry.GlobalLabels = [][]string{{"chain_id", args.chainID}} //nolint:staticcheck // TODO: switch to OpenTelemetry
 
 	var (
 		genAccounts []authtypes.GenesisAccount
@@ -513,8 +513,15 @@ func collectGenFiles(
 
 		genFile := nodeConfig.GenesisFile()
 
-		// overwrite each validator's genesis file to have a canonical genesis time
-		if err := genutil.ExportGenesisFileWithTime(genFile, chainID, nil, appState, genTime); err != nil {
+		// overwrite each validator's genesis file to have a canonical genesis
+		// time and the collected app state, preserving any custom
+		// ConsensusParams loaded from the existing genesis (e.g. opt-in
+		// validator key types like ml_dsa_65).
+		appGenesis.AppState = appState
+		if appGenesis.Consensus != nil {
+			appGenesis.Consensus.Validators = nil
+		}
+		if err := genutil.ExportGenesisFileWithTime(genFile, appGenesis, genTime); err != nil {
 			return err
 		}
 	}

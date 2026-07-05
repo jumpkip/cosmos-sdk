@@ -2,7 +2,7 @@ package keeper
 
 import (
 	"context"
-	"slices"
+	"errors"
 	"strconv"
 	"time"
 
@@ -17,7 +17,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
-	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
@@ -63,8 +62,21 @@ func (k msgServer) CreateValidator(ctx context.Context, msg *types.MsgCreateVali
 		return nil, errorsmod.Wrapf(sdkerrors.ErrInvalidType, "Expecting cryptotypes.PubKey, got %T", pk)
 	}
 
-	if _, err := k.GetValidatorByConsAddr(ctx, sdk.GetConsAddress(pk)); err == nil {
+	consAddr := sdk.GetConsAddress(pk)
+	locked, err := k.IsConsAddrLockedByRotation(ctx, consAddr)
+	if err != nil {
+		return nil, err
+	}
+	if locked {
+		return nil, types.ErrConsensusPubKeyInRotationHistory
+	}
+
+	_, err = k.GetValidatorByConsAddr(ctx, consAddr)
+	if err == nil {
 		return nil, types.ErrValidatorPubKeyExists
+	}
+	if !errors.Is(err, types.ErrNoValidatorFound) {
+		return nil, err
 	}
 
 	bondDenom, err := k.BondDenom(ctx)
@@ -85,13 +97,8 @@ func (k msgServer) CreateValidator(ctx context.Context, msg *types.MsgCreateVali
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	cp := sdkCtx.ConsensusParams()
 	if cp.Validator != nil {
-		pkType := pk.Type()
-		hasKeyType := slices.Contains(cp.Validator.PubKeyTypes, pkType)
-		if !hasKeyType {
-			return nil, errorsmod.Wrapf(
-				types.ErrValidatorPubKeyTypeNotSupported,
-				"got: %s, expected: %s", pk.Type(), cp.Validator.PubKeyTypes,
-			)
+		if err := types.ValidateConsensusPubKeyType(pk, cp.Validator.PubKeyTypes); err != nil {
+			return nil, err
 		}
 	}
 
@@ -277,6 +284,7 @@ func (k msgServer) Delegate(ctx context.Context, msg *types.MsgDelegate) (*types
 	}
 
 	// NOTE: source funds are always unbonded
+	ctx = types.WithStrictWithdraw(ctx)
 	newShares, err := k.Keeper.Delegate(ctx, delegatorAddress, msg.Amount.Amount, types.Unbonded, validator, true)
 	if err != nil {
 		return nil, err
@@ -284,11 +292,11 @@ func (k msgServer) Delegate(ctx context.Context, msg *types.MsgDelegate) (*types
 
 	if msg.Amount.Amount.IsInt64() {
 		defer func() {
-			telemetry.IncrCounter(1, types.ModuleName, "delegate")
-			telemetry.SetGaugeWithLabels(
+			telemetry.IncrCounter(1, types.ModuleName, "delegate") //nolint:staticcheck // TODO: switch to OpenTelemetry
+			telemetry.SetGaugeWithLabels(                          //nolint:staticcheck // TODO: switch to OpenTelemetry
 				[]string{"tx", "msg", sdk.MsgTypeURL(msg)},
 				float32(msg.Amount.Amount.Int64()),
-				[]metrics.Label{telemetry.NewLabel("denom", msg.Amount.Denom)},
+				[]metrics.Label{telemetry.NewLabel("denom", msg.Amount.Denom)}, //nolint:staticcheck // TODO: switch to OpenTelemetry
 			)
 		}()
 	}
@@ -349,6 +357,7 @@ func (k msgServer) BeginRedelegate(ctx context.Context, msg *types.MsgBeginRedel
 		)
 	}
 
+	ctx = types.WithStrictWithdraw(ctx)
 	completionTime, err := k.BeginRedelegation(
 		ctx, delegatorAddress, valSrcAddr, valDstAddr, shares,
 	)
@@ -358,11 +367,11 @@ func (k msgServer) BeginRedelegate(ctx context.Context, msg *types.MsgBeginRedel
 
 	if msg.Amount.Amount.IsInt64() {
 		defer func() {
-			telemetry.IncrCounter(1, types.ModuleName, "redelegate")
-			telemetry.SetGaugeWithLabels(
+			telemetry.IncrCounter(1, types.ModuleName, "redelegate") //nolint:staticcheck // TODO: switch to OpenTelemetry
+			telemetry.SetGaugeWithLabels(                            //nolint:staticcheck // TODO: switch to OpenTelemetry
 				[]string{"tx", "msg", sdk.MsgTypeURL(msg)},
 				float32(msg.Amount.Amount.Int64()),
-				[]metrics.Label{telemetry.NewLabel("denom", msg.Amount.Denom)},
+				[]metrics.Label{telemetry.NewLabel("denom", msg.Amount.Denom)}, //nolint:staticcheck // TODO: switch to OpenTelemetry
 			)
 		}()
 	}
@@ -421,6 +430,7 @@ func (k msgServer) Undelegate(ctx context.Context, msg *types.MsgUndelegate) (*t
 		)
 	}
 
+	ctx = types.WithStrictWithdraw(ctx)
 	completionTime, undelegatedAmt, err := k.Keeper.Undelegate(ctx, delegatorAddress, addr, shares)
 	if err != nil {
 		return nil, err
@@ -430,11 +440,11 @@ func (k msgServer) Undelegate(ctx context.Context, msg *types.MsgUndelegate) (*t
 
 	if msg.Amount.Amount.IsInt64() {
 		defer func() {
-			telemetry.IncrCounter(1, types.ModuleName, "undelegate")
-			telemetry.SetGaugeWithLabels(
+			telemetry.IncrCounter(1, types.ModuleName, "undelegate") //nolint:staticcheck // TODO: switch to OpenTelemetry
+			telemetry.SetGaugeWithLabels(                            //nolint:staticcheck // TODO: switch to OpenTelemetry
 				[]string{"tx", "msg", sdk.MsgTypeURL(msg)},
 				float32(msg.Amount.Amount.Int64()),
-				[]metrics.Label{telemetry.NewLabel("denom", msg.Amount.Denom)},
+				[]metrics.Label{telemetry.NewLabel("denom", msg.Amount.Denom)}, //nolint:staticcheck // TODO: switch to OpenTelemetry
 			)
 		}()
 	}
@@ -545,6 +555,7 @@ func (k msgServer) CancelUnbondingDelegation(ctx context.Context, msg *types.Msg
 	}
 
 	// delegate back the unbonding delegation amount to the validator
+	ctx = types.WithStrictWithdraw(ctx)
 	_, err = k.Keeper.Delegate(ctx, delegatorAddress, msg.Amount.Amount, types.Unbonding, validator, false)
 	if err != nil {
 		return nil, err
@@ -586,12 +597,21 @@ func (k msgServer) CancelUnbondingDelegation(ctx context.Context, msg *types.Msg
 
 // UpdateParams defines a method to perform updation of params exist in x/staking module.
 func (k msgServer) UpdateParams(ctx context.Context, msg *types.MsgUpdateParams) (*types.MsgUpdateParamsResponse, error) {
-	if k.authority != msg.Authority {
-		return nil, errorsmod.Wrapf(govtypes.ErrInvalidSigner, "invalid authority; expected %s, got %s", k.authority, msg.Authority)
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	if err := sdk.ValidateAuthority(sdkCtx, k.authority, msg.Authority); err != nil {
+		return nil, err
 	}
 
 	if err := msg.Params.Validate(); err != nil {
 		return nil, err
+	}
+
+	// Validate that the bond denom exists on-chain by checking if it has supply.
+	// This prevents governance from setting bond_denom to a non-existent denom,
+	// which would place the chain in an unsafe state.
+	supply := k.bankKeeper.GetSupply(ctx, msg.Params.BondDenom)
+	if supply.IsZero() {
+		return nil, errorsmod.Wrapf(sdkerrors.ErrInvalidRequest, "bond denom %s does not exist or has zero supply", msg.Params.BondDenom)
 	}
 
 	// store params
@@ -600,4 +620,93 @@ func (k msgServer) UpdateParams(ctx context.Context, msg *types.MsgUpdateParams)
 	}
 
 	return &types.MsgUpdateParamsResponse{}, nil
+}
+
+// RotateConsPubKey defines a method for changing a validators consensus key to
+// a new key.
+func (k msgServer) RotateConsPubKey(ctx context.Context, msg *types.MsgRotateConsPubKey) (*types.MsgRotateConsPubKeyResponse, error) {
+	if err := msg.Validate(k.validatorAddressCodec); err != nil {
+		return nil, err
+	}
+
+	newPk := msg.NewPubkey.GetCachedValue().(cryptotypes.PubKey)
+	newConsAddr := sdk.ConsAddress(newPk.Address())
+
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	if cp := sdkCtx.ConsensusParams(); cp.Validator != nil {
+		if err := types.ValidateConsensusPubKeyType(newPk, cp.Validator.PubKeyTypes); err != nil {
+			return nil, err
+		}
+	}
+
+	// reject a key locked by a rotation, either because some validator
+	// rotated away from it inside the unbonding window or because some
+	// validator already has a pending rotation targeting it
+	locked, err := k.IsConsAddrLockedByRotation(ctx, newConsAddr)
+	if err != nil {
+		return nil, err
+	}
+	if locked {
+		return nil, types.ErrConsensusPubKeyInRotationHistory
+	}
+
+	// reject a key currently in use by some validator
+	existing, err := k.GetValidatorByConsAddr(ctx, newConsAddr)
+	if err != nil && !errors.Is(err, types.ErrNoValidatorFound) {
+		return nil, err
+	}
+	if err == nil && existing.OperatorAddress != "" {
+		return nil, types.ErrConsensusPubKeyAlreadyUsedForValidator
+	}
+
+	valAddr, err := k.validatorAddressCodec.StringToBytes(msg.ValidatorAddress)
+	if err != nil {
+		return nil, sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
+	}
+	validator, err := k.GetValidator(ctx, valAddr)
+	if err != nil {
+		return nil, types.ErrNoValidatorFound
+	}
+
+	if validator.IsJailed() {
+		return nil, errorsmod.Wrapf(sdkerrors.ErrInvalidRequest, "validator is jailed")
+	}
+
+	// shouldnt ever happen
+	oldPk, ok := validator.ConsensusPubkey.GetCachedValue().(cryptotypes.PubKey)
+	if !ok {
+		return nil, errorsmod.Wrapf(sdkerrors.ErrInvalidType, "expecting cryptotypes.PubKey for validator's current key, got %T", validator.ConsensusPubkey.GetCachedValue())
+	}
+
+	// enforce the one rotation per validator limit inside the unbonding window
+	hasRotated, err := k.HasConsKeyRotationInUnbondingWindow(ctx, valAddr)
+	if err != nil {
+		return nil, err
+	}
+	if hasRotated {
+		return nil, types.ErrExceedingMaxConsPubKeyRotations
+	}
+
+	// route the rotation fee through the dedicated key rotation fee pool
+	// module account before burning. The pool is a burner module account so
+	// the fee is fully removed from supply and never mingles with bonded or
+	// unbonded staking balances.
+	keyRotationFee, err := k.KeyRotationFee(ctx)
+	if err != nil {
+		return nil, err
+	}
+	feeCoins := sdk.NewCoins(keyRotationFee)
+	if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, sdk.AccAddress(valAddr), types.KeyRotationFeePoolName, feeCoins); err != nil {
+		return nil, err
+	}
+	if err := k.bankKeeper.BurnCoins(ctx, types.KeyRotationFeePoolName, feeCoins); err != nil {
+		return nil, err
+	}
+
+	// record the key rotation in the store
+	if err := k.SetConsKeyRotation(ctx, valAddr, oldPk, newPk); err != nil {
+		return nil, err
+	}
+
+	return &types.MsgRotateConsPubKeyResponse{}, nil
 }

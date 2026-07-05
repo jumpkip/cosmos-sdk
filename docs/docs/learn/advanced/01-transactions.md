@@ -83,19 +83,9 @@ need to sign over the fees:
 https://github.com/cosmos/cosmos-sdk/blob/v0.53.0/proto/cosmos/tx/v1beta1/tx.proto#L68-L93
 ```
 
-The use case is a multi-signer transaction, where one of the signers is appointed to gather all signatures, broadcast the signature and pay for fees, and the others only care about the transaction body. This generally allows for a better multi-signing UX. If Alice, Bob and Charlie are part of a 3-signer transaction, then Alice and Bob can both use `SIGN_MODE_DIRECT_AUX` to sign over the `TxBody` and their own signer info (no need an additional step to gather other signers' ones, like in `SIGN_MODE_DIRECT`), without specifying a fee in their SignDoc. Charlie can then gather both signatures from Alice and Bob, and
+The use case is a multi-signer transaction, where one of the signers is appointed to gather all signatures, broadcast the signature and pay for fees, and the others only care about the transaction body. This generally allows for a better multi-signing UX. If Alice, Bob and Charlie are part of a 3-signer transaction, then Alice and Bob can both use `SIGN_MODE_DIRECT_AUX` to sign over the `TxBody` and their own signer info (no need for an additional step to gather other signers' ones, like in `SIGN_MODE_DIRECT`), without specifying a fee in their SignDoc. Charlie can then gather both signatures from Alice and Bob, and
 create the final transaction by appending a fee. Note that the fee payer of the transaction (in our case Charlie) must sign over the fees, so must use `SIGN_MODE_DIRECT` or `SIGN_MODE_LEGACY_AMINO_JSON`.
 
-
-#### `SIGN_MODE_TEXTUAL`
-
-`SIGN_MODE_TEXTUAL` is a new sign mode for delivering a better signing experience on hardware wallets and it is included in the v0.50 release. In this mode, the signer signs over the human-readable string representation of the transaction (CBOR) and makes all data being displayed easier to read. The data is formatted as screens, and each screen is meant to be displayed in its entirety even on small devices like the Ledger Nano.
-
-There are also _expert_ screens, which will only be displayed if the user has chosen that option in its hardware device. These screens contain things like account number, account sequence and the sign data hash.
-
-Data is formatted using a set of `ValueRenderer` which the SDK provides defaults for all the known messages and value types. Chain developers can also opt to implement their own `ValueRenderer` for a type/message if they'd like to display information differently.
-
-If you wish to learn more, please refer to [ADR-050](../../build/architecture/adr-050-sign-mode-textual.md).
 
 #### Custom Sign modes
 
@@ -128,7 +118,7 @@ While messages contain the information for state transition logic, a transaction
 
 ### Transaction Generation
 
-The `TxBuilder` interface contains data closely related with the generation of transactions, which an end-user can set to generate the desired transaction:
+The `TxBuilder` interface contains data closely related to the generation of transactions, which an end-user can set to generate the desired transaction:
 
 ```go reference
 https://github.com/cosmos/cosmos-sdk/blob/v0.53.0/client/tx_config.go#L39-L57
